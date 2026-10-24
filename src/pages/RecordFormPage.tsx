@@ -13,6 +13,7 @@ import { recordSchema, validateRecordContent, type RecordFormValues } from '@/li
 import { FIELDS_BY_TYPE, FIELD_LABEL, MEDICATION_STATUS_LABEL, RECORD_TYPES, RECORD_TYPE_LABEL, TEXTAREA_FIELDS } from '@/lib/recordTypes'
 import { fromDateTimeInput, toDateTimeInput, formatDateTime } from '@/lib/date'
 import { friendlyError } from '@/lib/errors'
+import { storageEnabled } from '@/lib/features'
 import { Button } from '@/components/ui/button'
 import { Field, Input, Select, Textarea } from '@/components/ui/form'
 import { Alert, Card, CardContent, CardHeader, CardTitle, EmptyState, ErrorState, PageHeader, Spinner } from '@/components/ui/misc'
@@ -209,6 +210,7 @@ export default function RecordFormPage() {
           </CardContent>
         </Card>
 
+        {storageEnabled && (
         <Card>
           <CardHeader>
             <CardTitle>Anexos</CardTitle>
@@ -231,6 +233,7 @@ export default function RecordFormPage() {
             </ul>
           </CardContent>
         </Card>
+        )}
 
         {formError && <Alert variant="danger">{formError}</Alert>}
         {isEdit && existing.data && <p className="text-xs text-muted-foreground">Rascunho criado em {formatDateTime(existing.data.createdAt)}.</p>}

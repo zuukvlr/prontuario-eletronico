@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { isValidIsoDate, todayIso } from '@/lib/date'
 import { digitsOnly } from '@/lib/text'
+import { storageEnabled } from '@/lib/features'
 import { REQUIRED_ANY_BY_TYPE } from '@/lib/recordTypes'
 import type { ClinicalContent, RecordType } from '@/types'
 
@@ -101,7 +102,7 @@ export function validateRecordContent(type: RecordType, content: ClinicalContent
     if (Array.isArray(v)) return v.some((m) => m.name?.trim())
     return typeof v === 'string' && v.trim().length > 0
   })
-  if (type === 'documento' && !hasAttachments) return 'Anexe ao menos um documento.'
+  if (type === 'documento' && storageEnabled && !hasAttachments) return 'Anexe ao menos um documento.'
   if (!filled) return 'Preencha ao menos um dos campos principais deste tipo de registro.'
   return null
 }

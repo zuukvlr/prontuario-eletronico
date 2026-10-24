@@ -11,7 +11,7 @@ Este guia usa o Console do Firebase (https://console.firebase.google.com) e o te
 
 - **Authentication** → *Começar* → método **E-mail/senha** (ative). **Não** ative "Link por e-mail" nem provedores desnecessários. Em *Configurações → Domínios autorizados*, mantenha só seus domínios.
 - **Firestore Database** → *Criar banco* → modo **produção** → região **`southamerica-east1` (São Paulo)** (não muda depois).
-- **Storage** → *Começar* → modo produção, mesma região.
+- **Storage** (opcional; exige plano Blaze em projetos novos — sem ele, defina `VITE_STORAGE_ENABLED=false` e publique as regras com `npm run deploy:rules:firestore`) → *Começar* → modo produção, mesma região.
 - **Hosting** → *Começar* (se for usar Firebase Hosting).
 
 ## 3. Registrar o app Web e preencher o `.env.local`
