@@ -1,0 +1,41 @@
+rules_version = '2';
+
+// Anexos clínicos: patients/{patientId}/{recordId}/{arquivo}
+// O acesso é decidido consultando o Firestore (usuário ativo + lista de acesso do paciente).
+// Arquivos são write-once: não podem ser sobrescritos nem apagados pelo cliente.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    function patientDoc(patientId) {
+      return firestore.get(/databases/(default)/documents/patients/$(patientId)).data;
+    }
+    function canAccess(patientId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && userDoc().active == true
+        && (userDoc().role == 'admin' || request.auth.uid in patientDoc(patientId).accessUids);
+    }
+    function allowedType() {
+      return request.resource.contentType.matches('application/pdf')
+        || request.resource.contentType.matches('image/(png|jpeg|webp|gif)')
+        || request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.(wordprocessingml.document|spreadsheetml.sheet)')
+        || request.resource.contentType.matches('text/plain');
+    }
+
+    match /patients/{patientId}/{recordId}/{fileName} {
+      allow read: if canAccess(patientId);
+      allow create: if canAccess(patientId)
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && allowedType();
+      allow update, delete: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

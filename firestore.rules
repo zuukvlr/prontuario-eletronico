@@ -1,0 +1,202 @@
+rules_version = '2';
+
+// =============================================================================
+// Regras de segurança do Firestore - Prontuário Eletrônico
+// Princípios: negar por padrão; acesso só para usuários ativos cadastrados em
+// /users; profissionais enxergam apenas pacientes em que constam em accessUids;
+// nada é excluído definitivamente; registros finalizados e relatórios finais
+// são imutáveis (correções via adendo/nova versão); auditoria é append-only.
+// =============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Funções auxiliares ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isActive() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && profile().active == true;
+    }
+    function isAdmin() {
+      return isActive() && profile().role == 'admin';
+    }
+    function hasAccess(accessUids) {
+      return isAdmin() || (isActive() && request.auth.uid in accessUids);
+    }
+    function patientData(patientId) {
+      return get(/databases/$(database)/documents/patients/$(patientId)).data;
+    }
+    function canAccessPatient(patientId) {
+      return hasAccess(patientData(patientId).accessUids);
+    }
+    function changedKeysOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+    function isString(v, max) {
+      return v is string && v.size() <= max;
+    }
+    function optString(data, key, max) {
+      return !(key in data) || data[key] == null || isString(data[key], max);
+    }
+
+    // ---------- Usuários ----------
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.role in ['admin', 'professional']
+        && request.resource.data.active is bool
+        && isString(request.resource.data.name, 120)
+        && isString(request.resource.data.email, 200);
+      allow delete: if false;
+    }
+
+    // ---------- Configurações ----------
+    match /settings/{docId} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+
+    // ---------- Pacientes ----------
+    match /patients/{patientId} {
+      allow get, list: if hasAccess(resource.data.accessUids);
+
+      allow create: if isAdmin()
+        && isString(request.resource.data.fullName, 160)
+        && request.resource.data.fullName.size() >= 3
+        && isString(request.resource.data.code, 20)
+        && isString(request.resource.data.birthDate, 10)
+        && request.resource.data.status in ['ativo', 'arquivado']
+        && request.resource.data.accessUids is list
+        && request.resource.data.responsibleUid in request.resource.data.accessUids
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && optString(request.resource.data, 'allergies', 4000)
+        && optString(request.resource.data, 'clinicalInfo', 8000)
+        && optString(request.resource.data, 'notes', 8000);
+
+      allow update: if isAdmin()
+        && request.resource.data.code == resource.data.code
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.status in ['ativo', 'arquivado']
+        && request.resource.data.accessUids is list
+        && request.resource.data.responsibleUid in request.resource.data.accessUids
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt == request.time
+        && isString(request.resource.data.fullName, 160);
+
+      // Nunca excluir pacientes: apenas arquivar.
+      allow delete: if false;
+    }
+
+    // ---------- Registros clínicos ----------
+    match /clinicalRecords/{recordId} {
+      allow get, list: if hasAccess(resource.data.accessUids);
+
+      allow create: if isActive()
+        && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.attendedAt is timestamp
+        && request.resource.data.attendedAt <= request.time + duration.value(5, 'm')
+        && request.resource.data.type in ['evolucao', 'relatorio', 'laudo', 'exame', 'prescricao', 'procedimento', 'observacao', 'documento', 'outros']
+        && request.resource.data.status in ['rascunho', 'finalizado']
+        && request.resource.data.version == 1
+        && request.resource.data.amendmentCount == 0
+        && request.resource.data.content is map
+        && request.resource.data.attachments is list
+        && request.resource.data.attachments.size() <= 20
+        && exists(/databases/$(database)/documents/patients/$(request.resource.data.patientId))
+        && canAccessPatient(request.resource.data.patientId)
+        && request.resource.data.accessUids == patientData(request.resource.data.patientId).accessUids;
+
+      allow update: if
+        // (a) o autor edita o próprio rascunho; datas de origem e vínculo são imutáveis
+        (isActive()
+          && resource.data.status == 'rascunho'
+          && resource.data.authorUid == request.auth.uid
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.authorUid == resource.data.authorUid
+          && request.resource.data.patientId == resource.data.patientId
+          && request.resource.data.accessUids == resource.data.accessUids
+          && request.resource.data.attendedAt <= request.time + duration.value(5, 'm')
+          && request.resource.data.status in ['rascunho', 'finalizado']
+          && request.resource.data.version == resource.data.version + 1)
+        // (b) o administrador sincroniza a lista de acesso quando as permissões do paciente mudam
+        || (isAdmin() && changedKeysOnly(['accessUids']))
+        // (c) um adendo incrementa o contador (o conteúdo original nunca muda)
+        || (hasAccess(resource.data.accessUids)
+          && resource.data.status == 'finalizado'
+          && changedKeysOnly(['amendmentCount'])
+          && request.resource.data.amendmentCount == resource.data.amendmentCount + 1);
+
+      allow delete: if false;
+
+      match /amendments/{amendmentId} {
+        allow get, list: if hasAccess(get(/databases/$(database)/documents/clinicalRecords/$(recordId)).data.accessUids);
+        allow create: if hasAccess(get(/databases/$(database)/documents/clinicalRecords/$(recordId)).data.accessUids)
+          && get(/databases/$(database)/documents/clinicalRecords/$(recordId)).data.status == 'finalizado'
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.kind in ['adendo', 'retificacao']
+          && isString(request.resource.data.reason, 2000)
+          && request.resource.data.reason.size() >= 5
+          && isString(request.resource.data.text, 8000);
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- Relatórios gerados ----------
+    match /generatedReports/{reportId} {
+      allow get, list: if hasAccess(resource.data.accessUids);
+
+      allow create: if isActive()
+        && request.resource.data.generatedByUid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.status == 'rascunho'
+        && request.resource.data.sections is list
+        && exists(/databases/$(database)/documents/patients/$(request.resource.data.patientId))
+        && canAccessPatient(request.resource.data.patientId)
+        && request.resource.data.accessUids == patientData(request.resource.data.patientId).accessUids;
+
+      allow update: if
+        // rascunho: o autor edita ou finaliza; depois de final, nada muda (nova versão = novo documento)
+        (isActive()
+          && resource.data.status == 'rascunho'
+          && resource.data.generatedByUid == request.auth.uid
+          && request.resource.data.patientId == resource.data.patientId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.number == resource.data.number
+          && request.resource.data.version == resource.data.version
+          && (request.resource.data.status == 'rascunho'
+              || (request.resource.data.status == 'final' && request.resource.data.finalizedAt == request.time)))
+        || (isAdmin() && changedKeysOnly(['accessUids']));
+
+      // Somente rascunhos podem ser descartados; documentos finais são permanentes.
+      allow delete: if isActive()
+        && resource.data.status == 'rascunho'
+        && resource.data.generatedByUid == request.auth.uid;
+    }
+
+    // ---------- Auditoria (append-only) ----------
+    match /auditLogs/{logId} {
+      allow read: if isAdmin() || (isActive() && resource.data.actorUid == request.auth.uid);
+      allow create: if isActive()
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && isString(request.resource.data.summary, 500)
+        && request.resource.data.keys().hasOnly(['action', 'entityType', 'entityId', 'patientId', 'actorUid', 'actorName', 'summary', 'createdAt']);
+      allow update, delete: if false;
+    }
+
+    // Negar tudo o que não foi explicitamente liberado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

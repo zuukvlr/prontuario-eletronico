@@ -1,0 +1,1 @@
+{"root":["./vite.config.ts","./vitest.rules.config.ts","./tests/rules/firestore.rules.test.ts"],"version":"5.6.3"}
